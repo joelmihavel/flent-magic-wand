@@ -1,0 +1,13 @@
+.DS_Store
+/.build
+/Packages
+xcuserdata/
+DerivedData/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+venv/
+__pycache__/
+*.pyc
+models/
+*.onnx
