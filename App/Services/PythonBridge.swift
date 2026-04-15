@@ -30,6 +30,14 @@ final class PythonBridge: Sendable {
         if FileManager.default.fileExists(atPath: cwd.appendingPathComponent("Scripts").path) {
             return cwd
         }
+
+        // Distributed layout: Scripts/ and venv/ live next to the .app bundle.
+        let sibling = Bundle.main.bundleURL.deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: sibling.appendingPathComponent("Scripts").path) {
+            return sibling
+        }
+
+        // SwiftPM dev fallback (run via `swift run`).
         return Bundle.main.bundleURL
             .deletingLastPathComponent()
             .deletingLastPathComponent()
