@@ -285,7 +285,7 @@ final class AppState: ObservableObject {
 
         case .convertWebP, .convertAVIF:
             let format = action.outputFormat
-            let data = try await ImageConverter.encodeViaPillow(
+            let data = try await ImageConverter.encode(
                 image: item.image,
                 sourceURL: item.sourceURL,
                 format: format,
@@ -304,51 +304,6 @@ final class AppState: ObservableObject {
                 processingDuration: Date().timeIntervalSince(startTime)
             )
         }
-    }
-
-    // MARK: - Lasso Refinement (single-image BG removal only)
-
-    func refinWithLasso(originalImage: NSImage, lassoPoints: [[Double]]) async throws -> NSImage {
-        let bridge = PythonBridge()
-        let tempDir = FileManager.default.temporaryDirectory
-
-        guard let tiffData = originalImage.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData),
-              let pngData = bitmap.representation(using: .png, properties: [:]) else {
-            throw ProcessingError.encodingFailed
-        }
-
-        let inputURL = tempDir.appendingPathComponent("mw_lasso_in_\(UUID().uuidString).png")
-        let outputURL = tempDir.appendingPathComponent("mw_lasso_out_\(UUID().uuidString).png")
-
-        try pngData.write(to: inputURL)
-        defer {
-            try? FileManager.default.removeItem(at: inputURL)
-            try? FileManager.default.removeItem(at: outputURL)
-        }
-
-        try await bridge.runLassoRefinement(
-            input: inputURL,
-            output: outputURL,
-            lassoPoints: lassoPoints
-        )
-
-        guard let outputImage = NSImage(contentsOf: outputURL) else {
-            throw ProcessingError.outputLoadFailed
-        }
-
-        return outputImage
-    }
-
-    func updateResult(processedImage: NSImage) {
-        guard var current = results.first else { return }
-        current.processedImage = processedImage
-        if let compressed = Self.compressToPNG(processedImage) {
-            current.outputData = compressed
-            current.outputFormat = .png
-            current.processedFileSize = Int64(compressed.count)
-        }
-        results[0] = current
     }
 
     // MARK: - Save

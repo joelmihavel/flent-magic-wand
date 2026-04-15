@@ -20,8 +20,6 @@ struct ResultView: View {
 private struct SingleResultView: View {
     @EnvironmentObject var appState: AppState
     @State private var showOriginal = false
-    @State private var lassoActive = false
-    @State private var isRefining = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -39,37 +37,14 @@ private struct SingleResultView: View {
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay {
-                                if lassoActive {
-                                    LassoOverlay(isActive: $lassoActive) { points in
-                                        handleLassoComplete(points)
-                                    }
-                                }
-                            }
-                            .overlay {
-                                if isRefining {
-                                    ZStack {
-                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .fill(.black.opacity(0.3))
-                                        VStack(spacing: 8) {
-                                            ProgressView().controlSize(.small)
-                                            Text("Refining...")
-                                                .font(.system(size: 12, weight: .medium))
-                                                .foregroundStyle(.white)
-                                        }
-                                    }
-                                }
-                            }
                     }
 
-                    if !lassoActive {
-                        DismissImageButton {
-                            withAnimation(.smooth(duration: 0.35)) {
-                                appState.reset()
-                            }
+                    DismissImageButton {
+                        withAnimation(.smooth(duration: 0.35)) {
+                            appState.reset()
                         }
-                        .padding(8)
                     }
+                    .padding(8)
                 }
                 .frame(maxHeight: 260)
                 .padding(.horizontal, 20)
@@ -82,88 +57,34 @@ private struct SingleResultView: View {
                         .padding(.horizontal, 20)
                 }
 
-                // Action row 1: Refine (BG only) + Save
-                HStack(spacing: 10) {
-                    if result.outputFormat == .png {
-                        Button {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                lassoActive.toggle()
-                                showOriginal = false
-                            }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: lassoActive ? "xmark" : "lasso")
-                                    .font(.system(size: 13, weight: .medium))
-                                Text(lassoActive ? "Cancel" : "Refine")
-                                    .font(.system(size: 12, weight: .semibold))
-                            }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 36)
-                            .background(lassoActive ? AnyShapeStyle(Color.red.opacity(0.8)) : AnyShapeStyle(.quaternary))
-                            .foregroundStyle(lassoActive ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isRefining)
+                Button(action: saveImage) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("Save")
+                            .font(.system(size: 12, weight: .semibold))
                     }
-
-                    Button(action: saveImage) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "arrow.down.circle.fill")
-                                .font(.system(size: 13, weight: .medium))
-                            Text("Save")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 36)
-                        .background(Color.accentColor)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isRefining || lassoActive)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 36)
+                    .background(Color.accentColor)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
+                .buttonStyle(.plain)
                 .padding(.horizontal, 20)
 
-                // Action row 2: Back + Process Another
                 HStack(spacing: 10) {
                     BackButton {
                         withAnimation(.smooth(duration: 0.3)) {
                             appState.backToActionChoice()
                         }
                     }
-                    .disabled(isRefining || lassoActive)
 
                     ProcessAnotherButton {
                         pickNewFiles()
                     }
-                    .disabled(isRefining || lassoActive)
                 }
                 .padding(.horizontal, 20)
-            }
-        }
-    }
-
-    private func handleLassoComplete(_ points: [[Double]]) {
-        guard !isRefining, let result = appState.primaryResult else { return }
-        isRefining = true
-        Task {
-            do {
-                let refined = try await appState.refinWithLasso(
-                    originalImage: result.originalImage,
-                    lassoPoints: points
-                )
-                await MainActor.run {
-                    withAnimation(.smooth(duration: 0.3)) {
-                        appState.updateResult(processedImage: refined)
-                        isRefining = false
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    isRefining = false
-                    appState.phase = .failed(message: "Refinement failed: \(error.localizedDescription)")
-                }
             }
         }
     }
