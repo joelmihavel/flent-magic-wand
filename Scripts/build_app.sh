@@ -79,6 +79,33 @@ chmod +x "$APP_DIR/Contents/Resources/bin/cwebp"
 echo "    bundled from: $CWEBP_SRC"
 file "$APP_DIR/Contents/Resources/bin/cwebp" | sed 's/^/    /'
 
+echo "==> Bundling cwebp dylib dependencies via dylibbundler"
+if ! command -v dylibbundler >/dev/null 2>&1; then
+    echo "ERROR: dylibbundler not found. Install with: brew install dylibbundler"
+    exit 1
+fi
+
+LIB_DIR="$APP_DIR/Contents/Resources/lib"
+mkdir -p "$LIB_DIR"
+
+# -od  overwrite existing files
+# -b   bundle dependencies of a binary (not a dylib)
+# -cd  make the bundler change the install names
+# -x   target binary to process
+# -d   destination dir for dylibs (relative to cwd of the app run? no — must be real path; dylibbundler copies here)
+# -p   rpath prefix stamped into load commands
+# -s   additional search path for dylibs
+dylibbundler \
+    -od -b -cd \
+    -x "$APP_DIR/Contents/Resources/bin/cwebp" \
+    -d "$LIB_DIR" \
+    -p "@executable_path/../lib/" \
+    -s /opt/homebrew/lib \
+    -s /usr/local/lib 2>&1 | sed 's/^/    /'
+
+echo "    dylibs bundled:"
+ls "$LIB_DIR" 2>/dev/null | sed 's/^/      /'
+
 echo "==> Bundling app icon"
 ICON_SRC="$ROOT/Resources/AppIcon.icns"
 if [ ! -f "$ICON_SRC" ]; then
@@ -130,7 +157,12 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> Ad-hoc signing nested cwebp first, then app"
+echo "==> Ad-hoc signing (dylibs -> cwebp -> app)"
+# Dylibs first (install_name_tool invalidated any prior signatures)
+for dylib in "$LIB_DIR"/*.dylib; do
+    [ -f "$dylib" ] || continue
+    codesign --force --sign - "$dylib"
+done
 codesign --force --sign - "$APP_DIR/Contents/Resources/bin/cwebp"
 codesign --force --deep --sign - --options runtime "$APP_DIR" || \
     codesign --force --deep --sign - "$APP_DIR"

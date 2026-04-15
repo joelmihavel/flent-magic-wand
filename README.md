@@ -46,7 +46,7 @@ No Python, no ML model downloads, no network calls.
 ```bash
 git clone https://github.com/joelmihavel/flent-magic-wand.git
 cd flent-magic-wand
-brew install webp            # provides cwebp for bundling
+brew install webp dylibbundler   # cwebp + dylib bundling
 ./Scripts/build_app.sh
 ```
 
