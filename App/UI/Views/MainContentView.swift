@@ -28,7 +28,14 @@ struct MainContentView: View {
                                     removal: .opacity.combined(with: .scale(scale: 0.95, anchor: .top))
                                 ))
 
-                        case .uploading, .removingBackground, .upscaling:
+                        case .awaitingAction:
+                            ActionChoiceView()
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)),
+                                    removal: .opacity.combined(with: .scale(scale: 0.95, anchor: .top))
+                                ))
+
+                        case .uploading, .processing:
                             ProcessingView()
                                 .transition(.asymmetric(
                                     insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)),

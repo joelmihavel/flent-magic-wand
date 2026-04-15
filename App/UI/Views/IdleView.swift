@@ -32,9 +32,10 @@ struct IdleView: View {
             .contentShape(RoundedRectangle(cornerRadius: 10))
 
             // Supported formats hint
-            Text("PNG, JPG, WEBP, HEIC")
+            Text("PNG, JPG, WEBP, HEIC — drop or pick multiple for batch")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
         }
         .padding(.horizontal, 20)
     }
@@ -47,15 +48,16 @@ struct IdleView: View {
 
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.png, .jpeg, .webP, .heic, .tiff]
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.message = "Select an image to remove its background"
+        panel.message = "Select one or more images"
         panel.level = .floating
 
         panel.begin { [weak appState] response in
-            guard response == .OK, let url = panel.url else { return }
+            guard response == .OK, !panel.urls.isEmpty else { return }
+            let urls = panel.urls
             Task { @MainActor in
-                appState?.handleFileURL(url)
+                appState?.handleFileURLs(urls)
             }
         }
     }
@@ -63,32 +65,40 @@ struct IdleView: View {
     // MARK: - Drop Handler
 
     private func handleDrop(_ providers: [NSItemProvider]) {
-        guard let provider = providers.first else { return }
+        // Collect URLs from all providers, then hand the batch to AppState once.
+        let group = DispatchGroup()
+        var urls: [URL] = []
+        var fallbackImage: NSImage?
+        let lock = NSLock()
 
-        // Try loading as file URL first
-        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
-                guard let data = item as? Data,
-                      let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-                Task { @MainActor in
-                    appState.handleFileURL(url)
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                group.enter()
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                    defer { group.leave() }
+                    if let data = item as? Data,
+                       let url = URL(dataRepresentation: data, relativeTo: nil) {
+                        lock.lock(); urls.append(url); lock.unlock()
+                    }
+                }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                group.enter()
+                provider.loadItem(forTypeIdentifier: UTType.image.identifier) { item, _ in
+                    defer { group.leave() }
+                    if let url = item as? URL {
+                        lock.lock(); urls.append(url); lock.unlock()
+                    } else if let data = item as? Data, let image = NSImage(data: data) {
+                        lock.lock(); if fallbackImage == nil { fallbackImage = image }; lock.unlock()
+                    }
                 }
             }
-            return
         }
 
-        // Fallback: load as image data
-        if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
-            provider.loadItem(forTypeIdentifier: UTType.image.identifier) { item, _ in
-                if let url = item as? URL {
-                    Task { @MainActor in
-                        appState.handleFileURL(url)
-                    }
-                } else if let data = item as? Data, let image = NSImage(data: data) {
-                    Task { @MainActor in
-                        appState.handleImageDrop(image)
-                    }
-                }
+        group.notify(queue: .main) {
+            if !urls.isEmpty {
+                appState.handleFileURLs(urls)
+            } else if let image = fallbackImage {
+                appState.handleImageDrop(image)
             }
         }
     }

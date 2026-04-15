@@ -7,7 +7,7 @@ struct ProcessingView: View {
     var body: some View {
         VStack(spacing: 16) {
             // Skeleton image with shimmer overlay
-            if let inputImage = appState.inputImage {
+            if let inputImage = appState.primaryInput?.image {
                 ZStack(alignment: .topTrailing) {
                     ZStack {
                         // Desaturated + dimmed input image as skeleton
@@ -47,6 +47,27 @@ struct ProcessingView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.tertiary)
             }
+
+            // Back button — abort processing and return to action selection
+            Button {
+                withAnimation(.smooth(duration: 0.3)) {
+                    appState.backToActionChoice()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Back")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(.quaternary.opacity(0.5))
+                )
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 0)
     }

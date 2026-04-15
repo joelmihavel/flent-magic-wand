@@ -45,6 +45,15 @@ final class PythonBridge: Sendable {
         )
     }
 
+    // MARK: - Image Conversion (Pillow)
+
+    func runImageConversion(input: URL, output: URL, format: String, quality: Int, targetKB: Int) async throws {
+        try await runPythonModule(
+            module: "pipeline.convert",
+            arguments: [input.path, output.path, format, String(quality), String(targetKB)]
+        )
+    }
+
     // MARK: - Lasso Refinement (SAM)
 
     func runLassoRefinement(input: URL, output: URL, lassoPoints: [[Double]]) async throws {
