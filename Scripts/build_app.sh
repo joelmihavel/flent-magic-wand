@@ -79,6 +79,14 @@ chmod +x "$APP_DIR/Contents/Resources/bin/cwebp"
 echo "    bundled from: $CWEBP_SRC"
 file "$APP_DIR/Contents/Resources/bin/cwebp" | sed 's/^/    /'
 
+echo "==> Bundling app icon"
+ICON_SRC="$ROOT/Resources/AppIcon.icns"
+if [ ! -f "$ICON_SRC" ]; then
+    echo "    AppIcon.icns missing — generating with Scripts/make_icon.swift"
+    swift "$ROOT/Scripts/make_icon.swift"
+fi
+cp "$ICON_SRC" "$APP_DIR/Contents/Resources/AppIcon.icns"
+
 echo "==> Writing Info.plist"
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -89,6 +97,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <string>en</string>
     <key>CFBundleExecutable</key>
     <string>$EXECUTABLE</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_ID</string>
     <key>CFBundleInfoDictionaryVersion</key>
