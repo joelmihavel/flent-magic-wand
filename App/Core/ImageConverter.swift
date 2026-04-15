@@ -59,33 +59,34 @@ enum ImageConverter {
             if inputIsTemp { try? FileManager.default.removeItem(at: inputURL) }
         }
 
-        if budgetBytes == 0 {
-            return try runCwebp(binary: cwebpPath, input: inputURL, quality: quality, resizeTo: nil)
+        // Quality is held fixed. Only resolution changes to meet the budget.
+        // Never produce blocky output — a smaller-but-sharp image looks
+        // better than a full-resolution compressed mess.
+        let fixedQuality = 90
+
+        let sourceData = try runCwebp(binary: cwebpPath, input: inputURL, quality: fixedQuality, resizeTo: nil)
+        if budgetBytes == 0 || sourceData.count <= budgetBytes {
+            return sourceData
         }
 
-        // Stage 1: binary-search quality at source resolution
-        if let data = try bestCwebpWithin(binary: cwebpPath, input: inputURL, budget: budgetBytes, resizeTo: nil, qLo: 20, qHi: 95) {
-            return data
-        }
-
-        // Stage 2: progressively downscale
         guard let baseSize = imageDimensions(url: inputURL) else {
-            // Give up gracefully at minimum quality
-            return try runCwebp(binary: cwebpPath, input: inputURL, quality: 20, resizeTo: nil)
+            return sourceData
         }
 
-        for pct in [0.85, 0.70, 0.55, 0.40, 0.30, 0.20] {
-            let w = max(32, Int(Double(baseSize.width) * pct))
-            let h = max(32, Int(Double(baseSize.height) * pct))
-            if let data = try bestCwebpWithin(binary: cwebpPath, input: inputURL, budget: budgetBytes, resizeTo: (w, h), qLo: 20, qHi: 90) {
+        var lastAttempt = sourceData
+        for pct in [0.85, 0.70, 0.55, 0.45, 0.35, 0.28, 0.22, 0.18, 0.14, 0.10] {
+            let w = max(64, Int(Double(baseSize.width) * pct))
+            let h = max(64, Int(Double(baseSize.height) * pct))
+            let data = try runCwebp(binary: cwebpPath, input: inputURL, quality: fixedQuality, resizeTo: (w, h))
+            lastAttempt = data
+            if data.count <= budgetBytes {
                 return data
             }
         }
 
-        // Last resort: tiny + low quality
-        let tinyW = max(32, Int(Double(baseSize.width) * 0.15))
-        let tinyH = max(32, Int(Double(baseSize.height) * 0.15))
-        return try runCwebp(binary: cwebpPath, input: inputURL, quality: 10, resizeTo: (tinyW, tinyH))
+        // Even at 10% scale we couldn't hit the budget at q=90 — return the
+        // smallest attempt. Quality is preserved; file may slightly exceed budget.
+        return lastAttempt
     }
 
     private static func bestCwebpWithin(binary: URL, input: URL, budget: Int, resizeTo: (Int, Int)?, qLo: Int, qHi: Int) throws -> Data? {
@@ -115,8 +116,12 @@ enum ImageConverter {
 
         var args: [String] = [
             "-quiet",
+            "-preset", "photo",      // tune for natural photographs
             "-q", String(max(0, min(100, quality))),
             "-m", "6",               // slowest / best compression
+            "-pass", "10",           // multi-pass rate-distortion optimization
+            "-sharp_yuv",            // better chroma subsampling
+            "-af",                   // auto-tune filtering strength
             "-metadata", "icc",      // preserve color profile
         ]
         if let (w, h) = resizeTo {
@@ -166,52 +171,142 @@ enum ImageConverter {
         return nil
     }
 
-    // MARK: - AVIF via ImageIO
+    // MARK: - AVIF
 
+    /// Prefer libavif's `avifenc` (reference encoder, much better at low
+    /// bitrates than Apple's ImageIO AVIF). Fall back to ImageIO if avifenc
+    /// isn't present — only happens in dev before running the build script.
     private static func encodeAVIF(image: NSImage, sourceURL: URL?, quality: Int, budgetBytes: Int) throws -> Data {
+        let fixedQuality = 90
+
+        if let avifenc = locateAvifenc() {
+            let (inputURL, inputIsTemp) = try materializeInput(image: image, sourceURL: sourceURL)
+            defer { if inputIsTemp { try? FileManager.default.removeItem(at: inputURL) } }
+
+            let sourceData = try runAvifenc(binary: avifenc, input: inputURL, quality: fixedQuality, resizeTo: nil)
+            if budgetBytes == 0 || sourceData.count <= budgetBytes {
+                return sourceData
+            }
+
+            guard let baseSize = imageDimensions(url: inputURL) else { return sourceData }
+
+            var lastAttempt = sourceData
+            for pct in [0.85, 0.70, 0.55, 0.45, 0.35, 0.28, 0.22, 0.18, 0.14, 0.10] {
+                let w = max(64, Int(Double(baseSize.width) * pct))
+                let h = max(64, Int(Double(baseSize.height) * pct))
+                let data = try runAvifenc(binary: avifenc, input: inputURL, quality: fixedQuality, resizeTo: (w, h))
+                lastAttempt = data
+                if data.count <= budgetBytes { return data }
+            }
+            return lastAttempt
+        }
+
+        // Fallback: ImageIO AVIF (lower quality at low bitrates)
         let typeID = "public.avif" as CFString
-
-        if budgetBytes == 0 {
-            return try avifEncode(image: image, sourceURL: sourceURL, typeID: typeID, quality: quality, scale: 1.0)
+        let sourceData = try avifEncodeImageIO(image: image, sourceURL: sourceURL, typeID: typeID, quality: fixedQuality, scale: 1.0)
+        if budgetBytes == 0 || sourceData.count <= budgetBytes {
+            return sourceData
         }
-
-        // Stage 1: search at source resolution
-        if let data = try bestAVIFWithin(image: image, sourceURL: sourceURL, typeID: typeID, budget: budgetBytes, scale: 1.0, qLo: 20, qHi: 95) {
-            return data
+        var lastAttempt = sourceData
+        for pct in [0.85, 0.70, 0.55, 0.45, 0.35, 0.28, 0.22, 0.18, 0.14, 0.10] {
+            let data = try avifEncodeImageIO(image: image, sourceURL: sourceURL, typeID: typeID, quality: fixedQuality, scale: pct)
+            lastAttempt = data
+            if data.count <= budgetBytes { return data }
         }
-
-        // Stage 2: downscale
-        for pct in [0.85, 0.70, 0.55, 0.40, 0.30, 0.20] {
-            if let data = try bestAVIFWithin(image: image, sourceURL: sourceURL, typeID: typeID, budget: budgetBytes, scale: pct, qLo: 20, qHi: 90) {
-                return data
-            }
-        }
-
-        // Last resort
-        return try avifEncode(image: image, sourceURL: sourceURL, typeID: typeID, quality: 10, scale: 0.15)
+        return lastAttempt
     }
 
-    private static func bestAVIFWithin(image: NSImage, sourceURL: URL?, typeID: CFString, budget: Int, scale: Double, qLo: Int, qHi: Int) throws -> Data? {
-        let floor = try avifEncode(image: image, sourceURL: sourceURL, typeID: typeID, quality: qLo, scale: scale)
-        if floor.count > budget { return nil }
-
-        var best = floor
-        var lo = qLo
-        var hi = qHi
-        while lo <= hi {
-            let mid = (lo + hi) / 2
-            let data = try avifEncode(image: image, sourceURL: sourceURL, typeID: typeID, quality: mid, scale: scale)
-            if data.count <= budget {
-                best = data
-                lo = mid + 1
-            } else {
-                hi = mid - 1
-            }
+    private static func runAvifenc(binary: URL, input: URL, quality: Int, resizeTo: (Int, Int)?) throws -> Data {
+        // avifenc has no native resize. If we need to downscale, write a
+        // PNG-scaled version first and hand that to the encoder.
+        let encoderInput: URL
+        let cleanup: Bool
+        if let (w, h) = resizeTo,
+           let cg = loadCGImage(from: input),
+           let scaled = resize(cgImage: cg, to: CGSize(width: w, height: h)) {
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mw_avifenc_in_\(UUID().uuidString).png")
+            try writePNG(cgImage: scaled, to: tmp)
+            encoderInput = tmp
+            cleanup = true
+        } else {
+            encoderInput = input
+            cleanup = false
         }
-        return best
+        defer { if cleanup { try? FileManager.default.removeItem(at: encoderInput) } }
+
+        let output = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mw_avifenc_\(UUID().uuidString).avif")
+        defer { try? FileManager.default.removeItem(at: output) }
+
+        // Quality -> qcolor 0-100. Speed 4 is a good quality/time tradeoff.
+        // 4:4:4 chroma at q≥90 keeps color detail sharp.
+        let args: [String] = [
+            "--quiet",
+            "-q", String(max(0, min(100, quality))),
+            "-s", "4",
+            "--yuv", "444",
+            encoderInput.path,
+            output.path,
+        ]
+
+        let process = Process()
+        process.executableURL = binary
+        process.arguments = args
+        let errPipe = Pipe()
+        process.standardError = errPipe
+        process.standardOutput = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            throw ImageConversionError.formatUnsupported("AVIF: \(err.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+        return try Data(contentsOf: output)
     }
 
-    private static func avifEncode(image: NSImage, sourceURL: URL?, typeID: CFString, quality: Int, scale: Double) throws -> Data {
+    private static func locateAvifenc() -> URL? {
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("bin/avifenc"),
+           FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled
+        }
+        for path in ["/opt/homebrew/bin/avifenc", "/usr/local/bin/avifenc"] {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+        }
+        if let env = ProcessInfo.processInfo.environment["PATH"] {
+            for dir in env.split(separator: ":") {
+                let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent("avifenc")
+                if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func loadCGImage(from url: URL) -> CGImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            return nil
+        }
+        return cg
+    }
+
+    private static func writePNG(cgImage: CGImage, to url: URL) throws {
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else {
+            throw ImageConversionError.encodingFailed
+        }
+        CGImageDestinationAddImage(dest, cgImage, nil)
+        guard CGImageDestinationFinalize(dest) else {
+            throw ImageConversionError.encodingFailed
+        }
+        try (data as Data).write(to: url)
+    }
+
+    private static func avifEncodeImageIO(image: NSImage, sourceURL: URL?, typeID: CFString, quality: Int, scale: Double) throws -> Data {
         // Resolve source CGImage + size.
         // When we have a URL we go through CGImageSource so ICC/EXIF survive.
         let (cgSource, sourceSize): (CGImage, CGSize)

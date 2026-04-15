@@ -1,6 +1,6 @@
 # Magic Wand
 
-A native macOS menu bar app for image cleanup. Remove backgrounds, compress to WebP, or compress to AVIF — all on-device, with a 30 KB size budget that keeps quality as high as it can fit.
+A native macOS menu bar app for image cleanup. Remove backgrounds, compress to WebP, or compress to AVIF — all on-device, with a 100 KB size budget tuned for web performance without visible quality loss.
 
 Built with Swift, SwiftUI, and AppKit. No cloud APIs. No Python. No model downloads. Drag-drop installable.
 
@@ -13,7 +13,7 @@ Built with Swift, SwiftUI, and AppKit. No cloud APIs. No Python. No model downlo
 - **Menu bar app** — one click (or `⌘⇧B`) from anywhere
 - **Three actions per image** — Remove Background / Compress to WebP / Compress to AVIF
 - **Bulk upload** — drop or pick many images, processed in order
-- **Budget-aware compression** — binary-searches the highest quality that fits under 30 KB, then progressively downscales if needed
+- **Budget-aware compression** — fixed quality (q=90), progressively downscales resolution to fit a 100 KB web-performance budget
 - **ICC color profile preservation** — reads the source file through `CGImageSource` so color stays true
 - **On-device only** — Apple Vision for background removal, ImageIO for AVIF, bundled `cwebp` for WebP
 - **Before/after toggle** — compare original vs. background-removed result
@@ -46,7 +46,7 @@ No Python, no ML model downloads, no network calls.
 ```bash
 git clone https://github.com/joelmihavel/flent-magic-wand.git
 cd flent-magic-wand
-brew install webp dylibbundler   # cwebp + dylib bundling
+brew install webp libavif dylibbundler   # cwebp + avifenc + dylib bundling
 ./Scripts/build_app.sh
 ```
 
@@ -83,14 +83,20 @@ Scripts/
 
 ## Compression Budget
 
-WebP and AVIF both target 30 KB per image:
+WebP and AVIF both target 100 KB per image — a common web-performance
+budget that preserves near-original quality.
 
-1. Encode at `q=20` (floor). If it's still too big at source resolution, skip to step 3.
-2. Binary-search quality in `[20, 95]` for the highest value that fits the budget.
-3. If step 2 fails, downscale to 85% / 70% / 55% / 40% / 30% / 20% and retry the search.
-4. Last resort: 15% scale at minimum quality.
+1. Encode at fixed quality (`q=90`) at source resolution.
+2. If it exceeds the budget, progressively downscale (85% / 70% / 55% /
+   45% / 35% / 28% / 22% / 18% / 14% / 10%) at the same quality until it
+   fits.
+3. Quality never drops — if even 10% scale at q=90 exceeds the budget,
+   the output is returned at that size. A sharp-but-smaller image always
+   beats a full-size blocky one.
 
-The goal is "the best-looking image that fits," not "always 30 KB."
+**Encoders**
+- WebP: bundled `cwebp` with `-preset photo -pass 10 -sharp_yuv -af`
+- AVIF: bundled `avifenc` (libavif reference encoder) with `-s 4 --yuv 444`
 
 ## Keyboard Shortcut
 

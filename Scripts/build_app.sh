@@ -60,26 +60,13 @@ for bundle in "$ROOT"/.build/apple/Products/Release/*.bundle \
 done
 shopt -u nullglob
 
-echo "==> Bundling cwebp"
-CWEBP_SRC=""
-for candidate in /opt/homebrew/bin/cwebp /usr/local/bin/cwebp; do
-    if [ -x "$candidate" ]; then
-        CWEBP_SRC="$candidate"
-        break
-    fi
-done
+locate_bin() {
+    local name="$1"
+    for candidate in "/opt/homebrew/bin/$name" "/usr/local/bin/$name"; do
+        if [ -x "$candidate" ]; then echo "$candidate"; return; fi
+    done
+}
 
-if [ -z "$CWEBP_SRC" ]; then
-    echo "ERROR: cwebp not found. Install with: brew install webp"
-    exit 1
-fi
-
-cp "$CWEBP_SRC" "$APP_DIR/Contents/Resources/bin/cwebp"
-chmod +x "$APP_DIR/Contents/Resources/bin/cwebp"
-echo "    bundled from: $CWEBP_SRC"
-file "$APP_DIR/Contents/Resources/bin/cwebp" | sed 's/^/    /'
-
-echo "==> Bundling cwebp dylib dependencies via dylibbundler"
 if ! command -v dylibbundler >/dev/null 2>&1; then
     echo "ERROR: dylibbundler not found. Install with: brew install dylibbundler"
     exit 1
@@ -88,16 +75,30 @@ fi
 LIB_DIR="$APP_DIR/Contents/Resources/lib"
 mkdir -p "$LIB_DIR"
 
-# -od  overwrite existing files
-# -b   bundle dependencies of a binary (not a dylib)
-# -cd  make the bundler change the install names
-# -x   target binary to process
-# -d   destination dir for dylibs (relative to cwd of the app run? no — must be real path; dylibbundler copies here)
-# -p   rpath prefix stamped into load commands
-# -s   additional search path for dylibs
+copy_tool() {
+    local name="$1"
+    local formula="$2"
+    local src
+    src=$(locate_bin "$name")
+    if [ -z "$src" ]; then
+        echo "ERROR: $name not found. Install with: brew install $formula"
+        exit 1
+    fi
+    echo "==> Bundling $name (from $src)"
+    cp "$src" "$APP_DIR/Contents/Resources/bin/$name"
+    chmod +x "$APP_DIR/Contents/Resources/bin/$name"
+}
+
+copy_tool cwebp webp
+copy_tool avifenc libavif
+
+echo "==> Bundling dylibs for cwebp + avifenc in one pass"
+# -od: overwrite destination dir (clear first). Because it clears, we must
+# process all binaries in a single invocation so nothing gets wiped.
 dylibbundler \
     -od -b -cd \
     -x "$APP_DIR/Contents/Resources/bin/cwebp" \
+    -x "$APP_DIR/Contents/Resources/bin/avifenc" \
     -d "$LIB_DIR" \
     -p "@executable_path/../lib/" \
     -s /opt/homebrew/lib \
@@ -157,13 +158,15 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> Ad-hoc signing (dylibs -> cwebp -> app)"
-# Dylibs first (install_name_tool invalidated any prior signatures)
+echo "==> Ad-hoc signing (dylibs -> helper binaries -> app)"
 for dylib in "$LIB_DIR"/*.dylib; do
     [ -f "$dylib" ] || continue
     codesign --force --sign - "$dylib"
 done
-codesign --force --sign - "$APP_DIR/Contents/Resources/bin/cwebp"
+for bin in "$APP_DIR"/Contents/Resources/bin/*; do
+    [ -f "$bin" ] || continue
+    codesign --force --sign - "$bin"
+done
 codesign --force --deep --sign - --options runtime "$APP_DIR" || \
     codesign --force --deep --sign - "$APP_DIR"
 codesign --verify --deep --strict "$APP_DIR" || true

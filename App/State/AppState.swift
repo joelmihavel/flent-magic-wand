@@ -289,8 +289,8 @@ final class AppState: ObservableObject {
                 image: item.image,
                 sourceURL: item.sourceURL,
                 format: format,
-                quality: 85,
-                targetKB: 30
+                quality: 90,
+                targetKB: 100
             )
             return ProcessingResult(
                 id: item.id,
